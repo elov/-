@@ -83,3 +83,74 @@ def generate_synthetic_video_space(
         frames.append(img)
 
     return timestamps, frames
+
+
+def generate_synthetic_creation_video(
+    duration_sec: float, fps: float = 2.0, size: int = 128, seed: int = 0
+) -> tuple:
+    """
+    Синтетическое видео с ЗАВЕДОМО известной последовательностью стадий —
+    для валидации modules.creation_stage.stage_classifier (аналогично
+    встроенной PAC-связи и известному burst-источнику в других ветках):
+
+        0-20%   эскиз            -- тонкие линии на пустом холсте
+        20-45%  подмалёвок       -- крупные малонасыщенные пятна
+        45-70%  работа с цветом  -- яркие насыщенные пятна, активное движение
+        70-90%  детализация      -- мелкие точечные правки
+        90-100% пауза/подпись    -- без изменений
+
+    Возвращает (timestamps, frames, ground_truth), где ground_truth --
+    [(момент_начала_сек, метка_стадии), ...].
+    """
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    n_frames = max(2, int(duration_sec * fps))
+    timestamps = np.arange(n_frames) / fps
+
+    canvas = np.ones((size, size, 3)) * 0.92
+    yy, xx = np.mgrid[0:size, 0:size]
+
+    bounds = [0.0, 0.20, 0.45, 0.70, 0.90, 1.0]
+    ground_truth = [
+        (bounds[0] * duration_sec, "эскиз"),
+        (bounds[1] * duration_sec, "подмалёвок"),
+        (bounds[2] * duration_sec, "работа с цветом"),
+        (bounds[3] * duration_sec, "детализация"),
+        (bounds[4] * duration_sec, "пауза/подпись"),
+    ]
+
+    frames = []
+    for t_idx in range(n_frames):
+        progress = t_idx / n_frames
+        if progress < bounds[1]:
+            x0, y0 = rng.uniform(0.2, 0.8, 2) * size
+            ang = rng.uniform(0, 2 * np.pi)
+            x1, y1 = x0 + np.cos(ang) * size * 0.3, y0 + np.sin(ang) * size * 0.3
+            n_pts = 20
+            for k in range(n_pts):
+                px = x0 + (x1 - x0) * k / n_pts
+                py = y0 + (y1 - y0) * k / n_pts
+                mask = (yy - py) ** 2 + (xx - px) ** 2 < 1.2 ** 2
+                canvas[mask] = [0.2, 0.2, 0.25]
+        elif progress < bounds[2]:
+            cy, cx = rng.uniform(0.2, 0.8, 2) * size
+            r = size * 0.18
+            mask = (yy - cy) ** 2 + (xx - cx) ** 2 < r ** 2
+            tone = 0.4 + rng.uniform(-0.05, 0.05)
+            canvas[mask] = [tone, tone * 0.95, tone * 0.85]
+        elif progress < bounds[3]:
+            cy, cx = rng.uniform(0.2, 0.8, 2) * size
+            r = size * 0.12
+            mask = (yy - cy) ** 2 + (xx - cx) ** 2 < r ** 2
+            color = rng.uniform(0.2, 1.0, 3)
+            color = color / (color.max() + 1e-9)
+            canvas[mask] = color
+        elif progress < bounds[4]:
+            cy, cx = rng.uniform(0.2, 0.8, 2) * size
+            r = size * 0.02
+            mask = (yy - cy) ** 2 + (xx - cx) ** 2 < r ** 2
+            canvas[mask] = rng.uniform(0.1, 0.9, 3)
+
+        frames.append(np.clip(canvas.copy(), 0, 1))
+
+    return timestamps, frames, ground_truth
